@@ -2,7 +2,7 @@ from datetime import datetime
 
 from django.shortcuts import get_object_or_404
 
-from extras.plugins import PluginTemplateExtension
+from netbox.plugins import PluginTemplateExtension
 from .models import CiscoDeviceTypeSupport, CiscoSupport
 
 
