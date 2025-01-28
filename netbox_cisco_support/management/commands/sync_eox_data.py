@@ -4,7 +4,6 @@ import django.utils.text
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
-from django.core.exceptions import MultipleObjectsReturned
 from datetime import datetime
 from requests import api
 from dcim.models import Manufacturer
@@ -29,13 +28,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("Trying to update device %s" % device['sr_no']))
 
         # Get the device object from NetBox
-        try:
-            d = Device.objects.get(serial=device['sr_no'])
-        except MultipleObjectsReturned:
-
-            # Error if netbox has multiple SN's and skip updating
-            self.stdout.write(self.style.NOTICE("ERROR: Multiple objects exist within Netbox with Serial Number " + device['sr_no']))
-            return
+        d = Device.objects.get(serial=device['sr_no'])
 
         # Check if a CiscoSupport object already exists, if not, create a new one
         try:
@@ -90,16 +83,8 @@ class Command(BaseCommand):
         return
 
     def update_device_type_eox_data(self, pid, eox_data):
-
-        try:
-            # Get the device type object for the supplied PID
-            dt = DeviceType.objects.get(part_number=pid)
-
-        except MultipleObjectsReturned:
-
-            # Error if netbox has multiple PN's
-            self.stdout.write(self.style.NOTICE("ERROR: Multiple objects exist within Netbox with Part Number " + pid))
-            return
+        # Get the device type object for the supplied PID
+        dt = DeviceType.objects.get(part_number=pid)
 
         # Check if CiscoDeviceTypeSupport record already exists
         try:
@@ -287,7 +272,7 @@ class Command(BaseCommand):
         CISCO_CLIENT_ID = PLUGIN_SETTINGS.get("cisco_client_id", "")
         CISCO_CLIENT_SECRET = PLUGIN_SETTINGS.get("cisco_client_secret", "")
 
-        token_url = "https://cloudsso.cisco.com/as/token.oauth2"
+        token_url = "https://id.cisco.com/oauth2/default/v1/token"
         data = {'grant_type': 'client_credentials', 'client_id': CISCO_CLIENT_ID, 'client_secret': CISCO_CLIENT_SECRET}
 
         access_token_response = requests.post(token_url, data=data)
@@ -312,7 +297,7 @@ class Command(BaseCommand):
 
         i = 1
         for pid in product_ids:
-            url = 'https://api.cisco.com/supporttools/eox/rest/5/EOXByProductID/1/%s?responseencoding=json' % pid
+            url = 'https://apix.cisco.com/supporttools/eox/rest/5/EOXByProductID/1/%s?responseencoding=json' % pid
             api_call_response = requests.get(url, headers=api_call_headers)
             self.stdout.write(self.style.SUCCESS('Call ' + url))
 
@@ -323,22 +308,13 @@ class Command(BaseCommand):
             # with open('/source/netbox_cisco_support/api-answer/%s' % filename, 'w') as outfile:
             #    outfile.write(api_call_response.text)
 
-            # Validate response from Cisco 
-            if api_call_response.status_code == 200:
+            # Deserialize JSON API Response into Python object "data"
+            data = json.loads(api_call_response.text)
 
-                # Deserialize JSON API Response into Python object "data"
-                data = json.loads(api_call_response.text)
+            # Call our Device Type Update method for that particular PID
+            self.update_device_type_eox_data(pid, data)
 
-                # Call our Device Type Update method for that particular PID
-                self.update_device_type_eox_data(pid, data)
-
-                i += 1
-
-            else:
-
-                # Show an error
-                self.stdout.write(self.style.ERROR('API Error: ' + api_call_response.text))
-
+            i += 1
 
         # Step 2: Get all Serial Numbers for all Devices of that particular manufacturer
         serial_numbers = self.get_serial_numbers(MANUFACTURER)
@@ -352,25 +328,17 @@ class Command(BaseCommand):
             current_slice = serial_numbers[:items_to_fetch]
             serial_numbers[:items_to_fetch] = []
 
-            url = 'https://api.cisco.com/sn2info/v2/coverage/summary/serial_numbers/%s' % ','.join(current_slice)
+            url = 'https://apix.cisco.com/sn2info/v2/coverage/summary/serial_numbers/%s' % ','.join(current_slice)
             api_call_response = requests.get(url, headers=api_call_headers)
             self.stdout.write(self.style.SUCCESS('Call ' + url))
 
-            # Validate response from Cisco 
-            if api_call_response.status_code == 200:
+            # Deserialize JSON API Response into Python object "data"
+            data = json.loads(api_call_response.text)
 
-                # Deserialize JSON API Response into Python object "data"
-                data = json.loads(api_call_response.text)
+            # Iterate through all serial numbers included in the API response
+            for device in data['serial_numbers']:
 
-                # Iterate through all serial numbers included in the API response
-                for device in data['serial_numbers']:
+                # Call our Device Update method for that particular Device
+                self.update_device_eox_data(device)
 
-                    # Call our Device Update method for that particular Device
-                    self.update_device_eox_data(device)
-
-                i += 1
-            
-            else:
-
-                # Show an error
-                self.stdout.write(self.style.ERROR('API Error: ' + api_call_response.text))
+            i += 1
